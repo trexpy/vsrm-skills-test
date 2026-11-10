@@ -11,7 +11,7 @@ param(
     [string[]]$Bilesen = @(),
     [string[]]$Komut = @(),
     [string]$HomeDir = $env:USERPROFILE,
-    [string]$YerelKok = (Join-Path $env:LOCALAPPDATA 'vSRM-Assistant'),
+    [string]$YerelKok = (Join-Path $env:USERPROFILE '.vsrm-assistant'),
     [switch]$Liste
 )
 $ErrorActionPreference = 'Stop'
