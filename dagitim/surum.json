@@ -1,0 +1,13 @@
+{
+ "surum": "v3.0-aday",
+ "parcalar": [
+  {
+   "ad": "danisman-paketi",
+   "bilesen": "",
+   "dosya": "vsrm-assistant-v3.0-aday.zip",
+   "hedef": ".",
+   "bayt": 877502,
+   "sha256": "8faf6d073149db4f9683303f8ca7cf5ef6236f488e57d3f489666c50725885be"
+  }
+ ]
+}
