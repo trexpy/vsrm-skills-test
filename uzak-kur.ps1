@@ -1,10 +1,7 @@
 # vSRM uzak baslaticisi. Icerik tasimaz; surum listesini ve secilen parcalari indirir, baslat.ps1'e devreder.
-# Kaynak: 'github' (varsayilan: ozel depodaki kurulum-* surumu, danisman GitHub girisiyle), 'sharepoint' (Entra uygulama kimligi varsa Graph, yoksa esitlenen OneDrive klasoru).
-# -TabanUrl verilirse dosyalar dogrudan o adresten alinir (testler).
+# Kaynak: 'github' (test), 'sharepoint' (Entra uygulama kimligi varsa Graph, yoksa esitlenen OneDrive klasoru).
 param(
-    [ValidateSet('github', 'sharepoint')][string]$Tur = 'github',
-    [string]$GitHubDepo = 'trexpy/vsrm-assistant-v3',
-    [string]$Etiket = '',
+    [ValidateSet('github', 'sharepoint')][string]$Tur = 'sharepoint',
     [string]$TabanUrl = 'https://raw.githubusercontent.com/trexpy/vsrm-skills-test/main/dagitim',
     [string]$KiraciId = '5ec21d40-ac3d-4a65-bca6-fb88928bd93a',
     [string]$UygulamaId = '',
@@ -23,8 +20,6 @@ $ProgressPreference = 'SilentlyContinue'
 $utf8 = New-Object System.Text.UTF8Encoding($false)
 $depo = Join-Path $YerelKok 'indirme'
 $script:Token = ''
-$script:Yayin = ($Tur -eq 'github' -and -not $PSBoundParameters.ContainsKey('TabanUrl'))
-$script:Varliklar = @{}
 
 function Base64Url([byte[]]$B) { [Convert]::ToBase64String($B).TrimEnd('=').Replace('+', '-').Replace('/', '_') }
 function Giris {
@@ -52,62 +47,16 @@ function Giris {
     }
     $script:Token = $t.access_token
 }
-function GitHub-Token {
-    if ($env:VSRM_GITHUB_TOKEN) { return $env:VSRM_GITHUB_TOKEN }
-    if (Get-Command gh -ErrorAction SilentlyContinue) {
-        $t = & gh auth token 2>$null
-        if ($LASTEXITCODE -eq 0 -and $t) { return "$t".Trim() }
-    }
-    if (Get-Command git -ErrorAction SilentlyContinue) {
-        # Git Credential Manager gerekirse tarayicida GitHub girisini acar; terminalden sifre sorulmaz.
-        $env:GIT_TERMINAL_PROMPT = '0'
-        $cikti = "protocol=https`nhost=github.com`n`n" | & git credential fill 2>$null
-        $satir = @($cikti) | Where-Object { $_ -like 'password=*' } | Select-Object -First 1
-        if ($satir) { return $satir.Substring(9) }
-    }
-    throw 'GitHub girisi bulunamadi. Bilgisayarda Git for Windows kurulu olmali; ilk kurulumda tarayicida GitHub girisi acilir.'
-}
-function Yayin-Bul {
-    $h = @{ Authorization = "Bearer $script:Token"; Accept = 'application/vnd.github+json'; 'User-Agent' = 'vsrm-kurulum' }
-    $yol = if ($Etiket) { "https://api.github.com/repos/$GitHubDepo/releases/tags/$Etiket" } else { "https://api.github.com/repos/$GitHubDepo/releases?per_page=30" }
-    try { $r = Invoke-RestMethod -Uri $yol -Headers $h -UseBasicParsing }
-    catch {
-        $kod = 0; try { $kod = [int]$_.Exception.Response.StatusCode } catch {}
-        if ($kod -eq 401) { throw 'GitHub girisi gecersiz. Tarayicida GitHub hesabina yeniden giris yap.' }
-        if ($kod -eq 404) { throw "Kurulum deposuna erisim yok ($GitHubDepo). Paket sahibinden GitHub daveti iste." }
-        throw "GitHub'a ulasilamadi: $($_.Exception.Message)"
-    }
-    if (-not $Etiket) { $r = @($r) | Where-Object { $_.tag_name -like 'kurulum-*' -and -not $_.draft } | Select-Object -First 1 }
-    if (-not $r) { throw 'Depoda kurulum surumu yok. Paket sahibine haber ver.' }
-    foreach ($a in @($r.assets)) { $script:Varliklar[$a.name] = $a.url }
-}
 function Adres([string]$Dosya) {
     if ($Tur -eq 'sharepoint') { return "https://graph.microsoft.com/v1.0/drives/$SurucuId/root:/$Klasor/$([uri]::EscapeDataString($Dosya)):/content" }
-    if ($script:Yayin) {
-        $u = $script:Varliklar[$Dosya]
-        if (-not $u) { throw "Kurulum surumunde dosya yok: $Dosya" }
-        return $u
-    }
     return "$TabanUrl/$Dosya"
 }
 function Istek([string]$Dosya, [long]$Baslangic) {
-    $adres = Adres $Dosya
-    for ($i = 0; $i -lt 4; $i++) {
-        $r = [Net.HttpWebRequest]::Create($adres)
-        $r.UserAgent = 'vsrm-kurulum'; $r.ReadWriteTimeout = 60000; $r.Timeout = 60000
-        $kimlikli = $script:Token -and ($adres -like 'https://graph.microsoft.com/*' -or $adres -like 'https://api.github.com/*')
-        if ($kimlikli) { $r.Headers['Authorization'] = "Bearer $script:Token" }
-        if ($script:Yayin) {
-            # GitHub dosyayi gecici bir indirme adresine yonlendirir; o adrese kimlik bilgisi gonderilmez.
-            $r.Accept = 'application/octet-stream'; $r.AllowAutoRedirect = $false
-        }
-        if ($Baslangic -gt 0) { $r.AddRange($Baslangic) }
-        $y = $r.GetResponse()
-        $kod = [int]$y.StatusCode
-        if ($kod -ge 300 -and $kod -lt 400 -and $y.Headers['Location']) { $adres = $y.Headers['Location']; $y.Close(); continue }
-        return $y
-    }
-    throw "Indirme adresi cok fazla yonlendirildi: $Dosya"
+    $r = [Net.HttpWebRequest]::Create((Adres $Dosya))
+    $r.UserAgent = 'vsrm-kurulum'; $r.ReadWriteTimeout = 60000; $r.Timeout = 60000
+    if ($script:Token) { $r.Headers['Authorization'] = "Bearer $script:Token" }
+    if ($Baslangic -gt 0) { $r.AddRange($Baslangic) }
+    return $r.GetResponse()
 }
 function Indir-Metin([string]$Dosya) {
     $y = Istek $Dosya 0
@@ -187,7 +136,6 @@ if ($Tur -eq 'sharepoint' -and -not $UygulamaId) {
     $manifest = [IO.File]::ReadAllText((Join-Path $kaynak 'surum.json'), $utf8) | ConvertFrom-Json
 } else {
     if ($Tur -eq 'sharepoint') { Giris }
-    if ($script:Yayin) { $script:Token = GitHub-Token; Yayin-Bul }
     $metin = Indir-Metin 'surum.json'
     [IO.File]::WriteAllText((Join-Path $depo 'surum.json'), $metin, $utf8)
     $manifest = $metin | ConvertFrom-Json
